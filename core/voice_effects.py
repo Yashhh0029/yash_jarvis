@@ -1,10 +1,11 @@
 # ============================================================
-#   JARVIS CINEMATIC SOUND ENGINE — UPDATED (NO SERIOUS TONE)
+#   JARVIS CINEMATIC SOUND ENGINE — STABLE & ENHANCED EDITION
 # ============================================================
 import os
 import pygame
 import threading
 import time
+import random
 
 os.environ.setdefault("SDL_AUDIODRIVER", "directsound")
 
@@ -20,11 +21,11 @@ def attach_overlay(overlay):
 
 
 class JarvisEffects:
-    """Cinematic Jarvis sound system (serious tone removed)."""
+    """Cinematic Jarvis sound system (serious tone removed, smoother typewriter)."""
 
     CHANNEL_SFX = 1
     CHANNEL_AMBIENT = 2
-    CHANNEL_UI = 3      # typing / UI pings
+    CHANNEL_UI = 3  # typing / UI pings
 
     def __init__(self):
         self.sounds_path = os.path.join(os.path.dirname(__file__), "sounds")
@@ -60,7 +61,6 @@ class JarvisEffects:
         if not os.path.exists(path):
             print(f"⚠️ Missing sound file: {path}")
             return None
-
         try:
             return pygame.mixer.Sound(path)
         except Exception as e:
@@ -91,7 +91,7 @@ class JarvisEffects:
 
                 if overlay_instance:
                     try:
-                        overlay_instance.react_to_audio(1.0)
+                        overlay_instance.react_to_audio(volume)
                     except:
                         pass
 
@@ -118,6 +118,16 @@ class JarvisEffects:
     def play_startup(self, short=False):
         dur = 2 if short else 5
         self._play_sound("startup_sequence.mp3", channel=self.CHANNEL_SFX, limit=dur)
+        # Optional overlay animation during boot
+        if overlay_instance:
+            try:
+                for i in range(5):
+                    overlay_instance.react_to_audio(1.0)
+                    time.sleep(0.4)
+                    overlay_instance.react_to_audio(0.2)
+                    time.sleep(0.25)
+            except:
+                pass
 
     def play_alert(self):
         self._play_sound("alert_warning.mp3", channel=self.CHANNEL_SFX)
@@ -129,7 +139,7 @@ class JarvisEffects:
         self._play_sound("listening_mode.mp3", channel=self.CHANNEL_UI)
 
     # --------------------------------------------------------
-    # AMBIENT
+    # AMBIENT BACKGROUND
     # --------------------------------------------------------
     def play_ambient(self):
         with self._ambient_lock:
@@ -151,13 +161,18 @@ class JarvisEffects:
             pass
 
     # --------------------------------------------------------
-    # TYPING EFFECT (for auto-type search)
+    # TYPEWRITER EFFECT (Enhanced realism)
     # --------------------------------------------------------
-    def typing_effect(self, duration=0.15):
-        self._play_sound("type_click.mp3", channel=self.CHANNEL_UI, limit=duration, volume=0.4)
+    def typing_effect(self, duration=0.12):
+        """Play a random-soft click per keystroke."""
+        try:
+            vol = random.uniform(0.35, 0.45)
+            self._play_sound("type_click.mp3", channel=self.CHANNEL_UI, limit=duration, volume=vol)
+        except Exception as e:
+            print(f"⚠️ Typing effect failed: {e}")
 
     # --------------------------------------------------------
-    # MOOD TONES (SERIOUS REMOVED)
+    # MOOD TONES (NO SERIOUS TONE)
     # --------------------------------------------------------
     def mood_tone(self, mood):
         mood = (mood or "").lower()
@@ -168,10 +183,10 @@ class JarvisEffects:
             self.play_success()
         elif mood == "listening":
             self.play_listening()
-        # ❌ serious tone removed completely
+        # serious tone removed intentionally
 
     # --------------------------------------------------------
-    # STOP ALL
+    # STOP ALL SOUNDS
     # --------------------------------------------------------
     def stop_all(self):
         try:

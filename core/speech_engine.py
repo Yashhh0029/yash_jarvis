@@ -12,7 +12,8 @@ try:
 except Exception:
     edge_tts = None
 
-from core.voice_effects import JarvisEffects, overlay_instance
+from core.voice_effects import JarvisEffects
+import core.voice_effects as fx        # <-- dynamic overlay reference
 
 jarvis_fx = JarvisEffects()
 
@@ -81,14 +82,14 @@ class JarvisVoice:
             StableMixer.voice.stop()
             StableMixer.voice.play(pygame.mixer.Sound(tmp_path))
 
-            if overlay_instance:
-                overlay_instance.react_to_audio(1.0)
+            if fx.overlay_instance:
+                fx.overlay_instance.react_to_audio(1.0)
 
             while StableMixer.voice.get_busy():
                 time.sleep(0.05)
 
-            if overlay_instance:
-                overlay_instance.react_to_audio(0.25)
+            if fx.overlay_instance:
+                fx.overlay_instance.react_to_audio(0.25)
 
             os.remove(tmp_path)
             return True
@@ -109,14 +110,14 @@ class JarvisVoice:
     # ---------------- OFFLINE ----------------
     def _speak_offline(self, text):
         try:
-            if overlay_instance:
-                overlay_instance.react_to_audio(1.0)
+            if fx.overlay_instance:
+                fx.overlay_instance.react_to_audio(1.0)
 
             self.offline_engine.say(text)
             self.offline_engine.runAndWait()
 
-            if overlay_instance:
-                overlay_instance.react_to_audio(0.2)
+            if fx.overlay_instance:
+                fx.overlay_instance.react_to_audio(0.2)
         except Exception as e:
             print(f"⚠️ Offline TTS error: {e}")
 
@@ -158,22 +159,22 @@ def speak(text, mood="neutral", mute_ambient=True):
         except:
             pass
 
-        if overlay_instance:
-            overlay_instance.react_to_audio(0.8)
+        if fx.overlay_instance:
+            fx.overlay_instance.react_to_audio(0.8)
 
         time.sleep(0.20)
 
         jarvis_voice.speak(text)
 
         # Calm aftermath
-        if overlay_instance:
-            overlay_instance.react_to_audio(0.15)
+        if fx.overlay_instance:
+            fx.overlay_instance.react_to_audio(0.15)
 
     except Exception as e:
         print(f"⚠️ Speak error: {e}")
 
 
-# ---------------- EXTRA: CINEMATIC 5-SEC STARTUP ----------------
+# ---------------- EXTRA: CINEMATIC STARTUP ----------------
 def play_boot_sequence():
     """Full 5-second cinematic startup sound."""
     try:
@@ -183,11 +184,11 @@ def play_boot_sequence():
         boot_sound = pygame.mixer.Sound(os.path.join("assets", "audio", "startup_long.wav"))
         StableMixer.sfx.play(boot_sound)
 
-        if overlay_instance:
+        if fx.overlay_instance:
             for _ in range(6):
-                overlay_instance.react_to_audio(1.3)
+                fx.overlay_instance.react_to_audio(1.3)
                 time.sleep(0.4)
-                overlay_instance.react_to_audio(0.3)
+                fx.overlay_instance.react_to_audio(0.3)
                 time.sleep(0.3)
 
     except Exception as e:

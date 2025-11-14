@@ -1,6 +1,11 @@
 {
-"facts": {},
-"mood": "neutral",
-"last_topic": null,
-"emotion_history": []
+  "facts": {},
+  "mood": "neutral",
+  "last_topic": null,
+  "emotion_history": [
+    {
+      "mood": "serious",
+      "time": "2025-11-14 22:41:16"
+    }
+  ]
 }
