@@ -13,13 +13,27 @@ except Exception:
     edge_tts = None
 
 from core.voice_effects import JarvisEffects
-import core.voice_effects as fx        # <-- dynamic overlay reference
+import core.voice_effects as fx
+import core.state as state     # <-- NEW: mic-mute integration
 
 jarvis_fx = JarvisEffects()
 
 
+# ---------------- LISTENER HOOK FOR MIC CONTROL ----------------
+LISTENER_HOOK = None
+
+def register_listener_hook(fn):
+    """
+    Listener will call register_listener_hook(self.set_speaking)
+    so speech engine can mute/unmute mic properly.
+    """
+    global LISTENER_HOOK
+    LISTENER_HOOK = fn
+
+
+# ---------------- MIXER ----------------
 class StableMixer:
-    """A stable mixer with dedicated sound channels (voice, sfx, ambient)."""
+    """Stable mixer with dedicated channels."""
 
     VOICE = 0
     SFX = 1
@@ -46,8 +60,9 @@ class StableMixer:
 StableMixer.init()
 
 
+# ---------------- TTS ENGINE ----------------
 class JarvisVoice:
-    """Handles Edge-TTS neural voice + offline fallback + overlay reactions."""
+    """Handles neural Edge TTS + pyttsx3 fallback + overlay animations."""
 
     def __init__(self):
         self.offline_engine = pyttsx3.init()
@@ -60,7 +75,7 @@ class JarvisVoice:
 
         print("🎧 Jarvis Voice Engine Ready")
 
-    # ---------------- VOICE SELECT ----------------
+    # ---------------------- VOICE PICK ----------------------
     def _get_voice(self, gender):
         voices = self.offline_engine.getProperty("voices")
         for v in voices:
@@ -68,7 +83,7 @@ class JarvisVoice:
                 return v.id
         return voices[0].id
 
-    # ---------------- EDGE TTS (NEURAL) ----------------
+    # ---------------------- EDGE TTS ------------------------
     async def _play_edge_tts(self, text):
         tmp_path = None
         try:
@@ -83,16 +98,17 @@ class JarvisVoice:
             StableMixer.voice.play(pygame.mixer.Sound(tmp_path))
 
             if fx.overlay_instance:
-                fx.overlay_instance.react_to_audio(1.0)
+                fx.overlay_instance.react_to_audio(1.1)
 
             while StableMixer.voice.get_busy():
                 time.sleep(0.05)
 
             if fx.overlay_instance:
-                fx.overlay_instance.react_to_audio(0.25)
+                fx.overlay_instance.react_to_audio(0.2)
 
             os.remove(tmp_path)
             return True
+
         except Exception as e:
             print(f"⚠️ Edge-TTS playback error: {e}")
             if tmp_path and os.path.exists(tmp_path):
@@ -107,7 +123,7 @@ class JarvisVoice:
         finally:
             loop.close()
 
-    # ---------------- OFFLINE ----------------
+    # ---------------------- OFFLINE -------------------------
     def _speak_offline(self, text):
         try:
             if fx.overlay_instance:
@@ -118,10 +134,11 @@ class JarvisVoice:
 
             if fx.overlay_instance:
                 fx.overlay_instance.react_to_audio(0.2)
+
         except Exception as e:
             print(f"⚠️ Offline TTS error: {e}")
 
-    # ---------------- MAIN SPEAK ----------------
+    # ---------------------- MAIN SPEAK ----------------------
     def speak(self, text, allow_fallback=True):
         if not text or not text.strip():
             return
@@ -130,30 +147,51 @@ class JarvisVoice:
             StableMixer.voice.stop()
             StableMixer.sfx.stop()
 
-            if self.online_enabled:
-                ok = self._run_async(self._play_edge_tts(text))
-                if ok:
-                    return
+            # 🔇 Tell listener to stop listening
+            state.SYSTEM_SPEAKING = True
+            try:
+                if LISTENER_HOOK:
+                    LISTENER_HOOK(True)
+            except:
+                pass
 
-            self._speak_offline(text)
+            try:
+                # Prefer neural TTS
+                if self.online_enabled:
+                    ok = self._run_async(self._play_edge_tts(text))
+                    if ok:
+                        return
+
+                # Fallback offline
+                self._speak_offline(text)
+
+            finally:
+                time.sleep(0.05)
+
+                # 🎤 Re-enable microphone
+                state.SYSTEM_SPEAKING = False
+                try:
+                    if LISTENER_HOOK:
+                        LISTENER_HOOK(False)
+                except:
+                    pass
 
 
-# ---------------- GLOBAL INSTANCE ----------------
+# GLOBAL INSTANCE
 jarvis_voice = JarvisVoice()
 
 
-# ---------------- PUBLIC INTERFACE ----------------
+# ---------------- PUBLIC SPEAK FUNCTION ----------------
 def speak(text, mood="neutral", mute_ambient=True):
-    """Unified speech output with mood tone + overlay sync."""
     if not text or not text.strip():
         return
 
     try:
-        # Stop ambient temporarily during speech
+        # Stop ambience during speech
         if mute_ambient:
             StableMixer.ambient.stop()
 
-        # Small tone before speech
+        # Small mood tone
         try:
             jarvis_fx.mood_tone(mood)
         except:
@@ -166,7 +204,7 @@ def speak(text, mood="neutral", mute_ambient=True):
 
         jarvis_voice.speak(text)
 
-        # Calm aftermath
+        # After-speech calm
         if fx.overlay_instance:
             fx.overlay_instance.react_to_audio(0.15)
 
@@ -174,9 +212,8 @@ def speak(text, mood="neutral", mute_ambient=True):
         print(f"⚠️ Speak error: {e}")
 
 
-# ---------------- EXTRA: CINEMATIC STARTUP ----------------
+# ---------------- CINEMATIC STARTUP ----------------
 def play_boot_sequence():
-    """Full 5-second cinematic startup sound."""
     try:
         jarvis_fx.stop_all()
         StableMixer.sfx.stop()

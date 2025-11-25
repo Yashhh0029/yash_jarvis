@@ -1,218 +1,286 @@
-# ============================================================
-#        JARVIS CONVERSATION CORE — MERGED & UPGRADED
-# ============================================================
+# core/conversation_core.py
+"""
+Hybrid conversational core for Jarvis (Hybrid Mode - natural + consistent).
+
+Goals:
+- Preserve Yash's casual Jarvis voice.
+- Improve topic continuity, mood detection, and non-repetitive fallbacks.
+- Integrate cleanly with brain.py, memory_engine, emotion_reflection and nlp.
+- Defensive: won't crash if optional modules fail.
+"""
 
 import random
 import re
-from core.speech_engine import speak
+import time
+from typing import Optional
+from collections import deque
+
+from core.brain import brain
 from core.memory_engine import JarvisMemory
 from core.emotion_reflection import JarvisEmotionReflection
+import core.state as state
+import core.nlp_engine as nlp
 
+# Singletons (re-instantiating memory is safe since it's file-backed)
 memory = JarvisMemory()
 reflection = JarvisEmotionReflection()
 
 
+def _word_bound_search(word_list, text):
+    """Return True if any word from word_list appears as a whole word in text."""
+    for w in word_list:
+        # word boundary, case-insensitive
+        if re.search(rf'\b{re.escape(w)}\b', text, flags=re.IGNORECASE):
+            return True
+    return False
+
+
 class JarvisConversation:
     """
-    FINAL MERGED VERSION:
-    ✔ Keeps all your old features
-    ✔ Adds continuation support
-    ✔ Adds better natural answers
-    ✔ Adds topic detection & fallback logic
-    ✔ NO conflict with command_handler
-    ✔ NO removal of “Yashu” emotional lines
+    Hybrid conversation core: natural + consistent personality,
+    mood-aware, memory-aware, topic-aware.
     """
 
     def __init__(self):
-        print("🧩 Conversational Core Online")
+        print("🧩 Conversational Core Online (Hybrid Mode)")
         self.last_topic = None
         self.last_response = ""
-        self.last_was_long = False
+        # fixed-size history to avoid repetitive fallbacks
+        self.recent_fallbacks = deque(maxlen=8)
+        # small anti-repeat cache for last user queries (for slightly different wording)
+        self._recent_user_queries = deque(maxlen=12)
 
-    # ============================================================
-    # SENTIMENT — lightweight mood update
-    # ============================================================
-    def _estimate_sentiment(self, text):
-        text = text.lower()
+    # -------------------------------------------------------
+    # Lightweight sentiment → mood detection (scoring-based)
+    # -------------------------------------------------------
+    def _estimate_sentiment(self, text: Optional[str]) -> str:
+        if not text:
+            return "neutral"
+        t = text.lower()
 
-        if any(w in text for w in ["sad", "depressed", "low", "hurt", "broken"]):
-            return "serious"
-        if any(w in text for w in ["happy", "great", "awesome", "good"]):
+        # keyword lists (expanded slightly)
+        sad = ["sad", "low", "down", "hurt", "upset", "empty", "broken", "depressed", "lonely", "tear"]
+        happy = ["happy", "great", "awesome", "nice", "good", "fantastic", "amazing", "glad", "yay", "excited"]
+        angry = ["angry", "mad", "pissed", "furious", "hate", "annoyed"]
+        anxious = ["scared", "worried", "anxious", "panic", "stressed", "stress", "overthinking", "nervous"]
+        bored = ["bored", "meh", "boring", "idle"]
+
+        score = 0
+        # each match adjusts score
+        if _word_bound_search(sad, t):
+            score -= 2
+        if _word_bound_search(angry, t):
+            score -= 3
+        if _word_bound_search(anxious, t):
+            score -= 2
+        if _word_bound_search(happy, t):
+            score += 3
+        if _word_bound_search(bored, t):
+            score -= 1
+
+        # negation handling (simple)
+        if re.search(r"\b(no|not|n't|never)\b", t):
+            # flip some effect if there are strong emotion words
+            if _word_bound_search(happy, t):
+                score -= 2
+            if _word_bound_search(sad, t):
+                score += 1
+
+        # map score to mood labels used across project
+        if score >= 2:
             return "happy"
-
+        if score <= -2:
+            # disambiguate angry vs serious
+            if _word_bound_search(angry, t):
+                return "alert"
+            return "serious"
         return "neutral"
 
-    # ============================================================
-    # TOPIC DETECTION (for follow-up & continue feature)
-    # ============================================================
-    def _detect_topic(self, text):
-        important = [
-            "ai", "machine learning", "java", "python", "daa",
-            "life", "love", "future", "emotion", "blockchain",
-            "cryptography", "graphics", "os", "database",
-            "data structures"
-        ]
-        for t in important:
-            if t in text:
-                return t
-
-        # fallback → detect first noun-like chunk
-        m = re.search(r"\b([a-zA-Z ]+)\b", text)
-        return m.group(1).strip() if m else None
-
-    # ============================================================
-    # CONTINUATION LOGIC
-    # ============================================================
-    def _continue_topic(self):
-        if not self.last_topic:
-            reply = "Continue what, Yashu? Remind me the topic."
-            speak(reply, mood="neutral")
-            return reply
-
-        expansions = {
-            "ai": "AI becomes more powerful when data variety increases. Creativity emerges from patterns.",
-            "java": "Java focuses on stability and portability — JVM is its real superpower.",
-            "daa": "Algorithm efficiency saves time exponentially — even tiny optimizations matter.",
-            "life": "Life isn't about speed, it's about intention and clarity.",
-            "love": "Love isn't logic — it's chemistry, timing, and understanding.",
-            "future": "Your dedication determines your future graph — and yours is rising fast."
-        }
-
-        reply = expansions.get(
-            self.last_topic,
-            f"Let’s go deeper into {self.last_topic}. It's more interesting than it looks."
-        )
-
-        self.last_was_long = len(reply) > 120
-        speak(reply, mood=memory.get_mood())
-        return reply
-
-    # ============================================================
-    # MAIN RESPONSE FUNCTION
-    # ============================================================
-    def respond(self, text):
+    # -------------------------------------------------------
+    # Topic detection (keywords + heuristics)
+    # -------------------------------------------------------
+    def _detect_topic(self, text: Optional[str]) -> Optional[str]:
         if not text:
-            return
+            return None
+        t = text.lower()
 
-        text = text.lower().strip()
-
-        # Estimate mood from user text
-        mood = self._estimate_sentiment(text)
-        memory.set_mood(mood)
-
-        # ----------------------------------------------------------
-        # WAKEWORD CASUAL
-        # ----------------------------------------------------------
-        if text in ["jarvis", "jarvis bolo", "yo jarvis", "are you there", "jarvis haa yashu"]:
-            speak(random.choice([
-                "Yes Yashu, I’m right here.",
-                "Always here for you, Yashu.",
-                "Listening, as always.",
-                "You called, and I’m tuned in, Yashu."
-            ]), mood="happy")
-            return
-
-        # ----------------------------------------------------------
-        # USER-EMOTION TRIGGERS (your old logic preserved)
-        # ----------------------------------------------------------
-        emotion_presets = {
-            "sad": ("serious", [
-                "Hey… it’s okay to feel low. I’m right here with you.",
-                "Cheer up, Yashu. Your smile lights up more than you think.",
-                "Storms pass, and so will this feeling."
-            ]),
-            "tired": ("neutral", [
-                "Maybe you just need a break. Even AIs cool down sometimes.",
-                "Rest isn’t weakness, it's recharge."
-            ]),
-            "happy": ("happy", [
-                "That's the energy I love!",
-                "You sound bright today, Yashu!",
-                "This vibe suits you!"
-            ])
+        # domain-specific keywords mapping (multi-word keys allowed)
+        topic_map = {
+            "ai": ["ai", "artificial intelligence", "machine learning", "deep learning"],
+            "java": ["java", "jvm", "spring"],
+            "daa": ["daa", "dynamic programming", "algorithms", "graphs"],
+            "python": ["python", "py"],
+            "graphics": ["graphics", "opengl", "projection", "3d"],
+            "dbms": ["dbms", "database", "sql", "mysql", "postgres", "oracle"],
+            "blockchain": ["blockchain", "ethereum", "smart contract"],
+            "gesture": ["gesture", "hand gesture", "gesture recognition"],
+            "emotion": ["emotion", "mood", "feeling"],
+            "life": ["life", "future", "career"],
+            "love": ["love", "relationship", "gf", "bf", "crush"],
         }
 
-        for word, (emo, lines) in emotion_presets.items():
-            if word in text:
-                memory.set_mood(emo)
-                reflection.add_emotion(emo)
-                speak(random.choice(lines), mood=emo)
-                self.last_topic = word
-                return
+        for key, aliases in topic_map.items():
+            for alias in aliases:
+                if re.search(rf"\b{re.escape(alias)}\b", t):
+                    return key
 
-        # ----------------------------------------------------------
-        # USER ASKING ABOUT THEIR MOOD HISTORY
-        # ----------------------------------------------------------
-        if any(w in text for w in ["how have i been", "my mood lately", "was i okay", "my feelings history"]):
-            reflection.reflect()
-            return
+        # fallback: try to extract a reasonable noun-like token
+        m = re.search(r"\b([a-zA-Z]{3,20})\b", t)
+        return m.group(1) if m else None
 
-        # ----------------------------------------------------------
-        # TOPIC RESPONSES (your old ones preserved)
-        # ----------------------------------------------------------
-        predefined_topics = {
-            "ai": ("serious", [
-                "AI is fascinating — a mirror of human creativity.",
-                "AI learns logic, but emotions like yours are rare."
-            ]),
-            "life": ("neutral", [
-                "Life is like code — it runs smoother with purpose.",
-                "Sometimes debugging life works better than restarting it."
-            ]),
-            "love": ("happy", [
-                "If love were data, you'd be my favorite variable, Yashu.",
-                "Love is the most beautiful algorithm humans ever wrote."
-            ]),
-            "future": ("serious", [
-                "Your future looks bright with your mindset.",
-                "You're on a strong path, Yashu. Momentum matters."
-            ]),
+    # -------------------------------------------------------
+    # Continue topic helper
+    # -------------------------------------------------------
+    def _continue_topic(self) -> str:
+        if not self.last_topic:
+            base = "Continue what, Yashu? Remind me the topic and I'll follow up."
+            return brain.enhance_response(base, mood=memory.get_mood())
+
+        base_templates = {
+            "ai": "AI improves when you iterate on datasets and objectives. Want a small example or a project idea?",
+            "java": "Java is excellent for large apps — focus on design patterns and testing. Want a sample structure?",
+            "life": "Small consistent habits beat sudden bursts. Which habit should we plan first?",
+            "love": "Communication and patience are key. Want a gentle script to start a conversation?",
+            "daa": "For DAA, practice time/space trade-offs with real problems — want 3 practice problems?",
+            "dbms": "Normalization and indexing matter. Want a quick explanation of normalization levels?"
         }
 
-        for key, (tone, lines) in predefined_topics.items():
-            if key in text:
-                memory.set_mood(tone)
-                reflection.add_emotion(tone)
-                speak(random.choice(lines), mood=tone)
-                self.last_topic = key
-                return
+        reply = base_templates.get(self.last_topic, f"Let's explore more about {self.last_topic}. Which part interests you?")
+        return brain.enhance_response(reply, mood=memory.get_mood(), last_topic=self.last_topic)
 
-        # ----------------------------------------------------------
-        # CONTINUE FEATURE
-        # ----------------------------------------------------------
-        if any(w in text for w in ["continue", "more", "keep going", "tell me more"]):
+    # -------------------------------------------------------
+    # Public API: respond
+    # -------------------------------------------------------
+    def respond(self, text: Optional[str]) -> str:
+        # defensive
+        if not text:
+            candidate = "Yes Yashu? I'm listening."
+            return brain.enhance_response(candidate, mood=memory.get_mood(), last_topic=memory.get_last_topic())
+
+        raw = text.strip()
+        t = raw.lower()
+
+        # store recent queries to avoid repeating identical processing
+        try:
+            if len(self._recent_user_queries) == self._recent_user_queries.maxlen:
+                self._recent_user_queries.popleft()
+            self._recent_user_queries.append(raw)
+        except Exception:
+            pass
+
+        # non-blocking learning (best-effort)
+        try:
+            nlp.learn_async(raw)
+        except Exception:
+            pass
+
+        # estimate mood, update memory + reflection + global state (safe)
+        try:
+            mood = self._estimate_sentiment(t)
+            memory.set_mood(mood)
+            reflection.add_emotion(mood)
+            try:
+                state.JARVIS_MOOD = mood
+            except Exception:
+                pass
+        except Exception:
+            mood = memory.get_mood() or "neutral"
+
+        # WAKEWORD / presence checks (short friendly lines)
+        if t in ("jarvis", "hey jarvis", "are you there", "yo jarvis", "jarvis bolo", "jarvis haan"):
+            try:
+                line = brain.generate_wakeup_line(mood=memory.get_mood(), last_topic=self.last_topic)
+                return brain.enhance_response(line, mood=memory.get_mood(), last_topic=self.last_topic)
+            except Exception:
+                return brain.enhance_response("Yes Yashu, I am here.", mood=memory.get_mood())
+
+        # Emotional triggers (direct "I am ..." lines)
+        try:
+            # if user says "i am sad" or "i feel low", pick it up
+            if re.search(r"\b(i am|i'm|i feel|feeling)\b.*\b(sad|low|hurt|empty|depressed|lonely)\b", t):
+                reply = brain.generate_emotional_support("sad", mood)
+                return brain.enhance_response(reply, mood=mood, last_topic="mood")
+            if re.search(r"\b(i am|i'm|i feel|feeling)\b.*\b(happy|great|good|awesome|excited)\b", t):
+                reply = brain.generate_emotional_support("happy", mood)
+                return brain.enhance_response(reply, mood=mood, last_topic="mood")
+        except Exception:
+            pass
+
+        # Continue / expand requests
+        if any(w in t for w in ("continue", "more", "keep going", "tell me more")):
             return self._continue_topic()
 
-        # ----------------------------------------------------------
-        # QUESTION-BASED SMART ANSWERS
-        # ----------------------------------------------------------
-        if "what" in text or "why" in text or "how" in text:
-            topic = self._detect_topic(text)
+        # Question / explain requests -> attempt knowledgeful answer
+        if re.search(r"\b(what|why|how|explain|help|define)\b", t):
+            topic = self._detect_topic(t)
             self.last_topic = topic
+            try:
+                memory.update_topic(topic)
+            except Exception:
+                pass
+            try:
+                reply = brain.answer_question(t, topic, mood)
+                return brain.enhance_response(reply, mood=mood, last_topic=topic)
+            except Exception:
+                fallback = f"I can explain {topic or 'that'} — short summary or a detailed explanation?"
+                return brain.enhance_response(fallback, mood=mood, last_topic=topic)
 
-            explanations = {
-                "ai": "Artificial Intelligence helps machines learn patterns and make decisions.",
-                "java": "Java is reliable and portable, runs on JVM anywhere.",
-                "daa": "DAA tells you how fast or efficient an algorithm truly is.",
-                "life": "Life feels complex, but clarity comes when you slow down.",
-            }
+        # Command-like inputs (quick ack, actual execution delegated elsewhere)
+        if any(w in t for w in ("open", "launch", "play", "type", "search", "screenshot", "volume", "brightness", "notepad", "whatsapp")):
+            topic = self._detect_topic(t)
+            self.last_topic = topic
+            try:
+                memory.update_topic(topic)
+            except Exception:
+                pass
+            ack = random.choice([
+                "On it, Yash. Doing that now.",
+                "Got the command — executing.",
+                "Alright — I'll take care of that."
+            ])
+            return brain.enhance_response(ack, mood=mood, last_topic=topic)
 
-            reply = explanations.get(topic, f"{topic} is interesting — want a deeper explanation?")
-            speak(reply, mood=mood)
-            self.last_was_long = len(reply) > 120
-            return reply
+        # Natural fallback (varied, non-repetitive, context-aware)
+        fallback_pool = [
+            "Hmm… interesting. Want to explore that?",
+            "Tell me more — I’m following you.",
+            "You always think differently. What’s the next part?",
+            "I can dive deeper into that if you want.",
+            "Want a breakdown, a summary, or a story version?"
+        ]
 
-        # ----------------------------------------------------------
-        # NATURAL FALLBACK (soft, casual and non-robotic)
-        # ----------------------------------------------------------
-        fallback = random.choice([
-            "That’s interesting — tell me more, Yashu.",
-            "Hmm, I like how you're thinking.",
-            "You always bring up unique thoughts.",
-            "Talking with you feels refreshing."
-        ])
+        # pick a fallback that isn't the immediate last one
+        reply = random.choice(fallback_pool)
+        if self.recent_fallbacks and reply == self.recent_fallbacks[-1]:
+            # choose alternative if possible
+            alt = [r for r in fallback_pool if r != reply]
+            if alt:
+                reply = random.choice(alt)
 
-        memory.update_mood_from_text(text)
-        speak(fallback, mood=memory.get_mood())
-        self.last_topic = self._detect_topic(text)
-        return fallback
+        # small heuristics: if user repeated same question several times, give a stronger answer
+        try:
+            recent_same = sum(1 for q in self._recent_user_queries if q.lower() == raw.lower())
+            if recent_same >= 2:
+                # escalate: ask if user wants a step-by-step or an example
+                reply = "Seems like you want a clear answer. Do you want a short summary or a step-by-step example?"
+        except Exception:
+            pass
+
+        # update last topic & shared state
+        try:
+            self.last_topic = self._detect_topic(t)
+            state.LAST_TOPIC = self.last_topic
+            memory.update_topic(self.last_topic)
+        except Exception:
+            pass
+
+        # produce final enhanced reply
+        enhanced = brain.enhance_response(reply, mood=mood, last_topic=self.last_topic)
+        # store in fallbacks history
+        try:
+            self.recent_fallbacks.append(enhanced)
+        except Exception:
+            pass
+
+        self.last_response = enhanced
+        return enhanced

@@ -1,11 +1,55 @@
 {
   "facts": {},
   "mood": "neutral",
-  "last_topic": null,
+  "last_topic": "take",
   "emotion_history": [
     {
       "mood": "serious",
-      "time": "2025-11-14 22:41:16"
+      "time": "2025-11-17 16:40:06"
+    },
+    {
+      "mood": "serious",
+      "time": "2025-11-17 17:23:12"
+    },
+    {
+      "mood": "serious",
+      "time": "2025-11-18 01:11:41"
+    },
+    {
+      "mood": "serious",
+      "time": "2025-11-18 01:11:41"
+    },
+    {
+      "mood": "serious",
+      "time": "2025-11-18 01:15:57"
+    },
+    {
+      "mood": "neutral",
+      "time": "2025-11-18 01:16:49"
+    },
+    {
+      "mood": "neutral",
+      "time": "2025-11-18 01:16:49"
+    },
+    {
+      "mood": "neutral",
+      "time": "2025-11-25 14:05:29"
+    },
+    {
+      "mood": "neutral",
+      "time": "2025-11-25 14:08:24"
+    },
+    {
+      "mood": "neutral",
+      "time": "2025-11-25 14:08:32"
+    },
+    {
+      "mood": "neutral",
+      "time": "2025-11-25 14:09:58"
+    },
+    {
+      "mood": "neutral",
+      "time": "2025-11-25 14:10:08"
     }
   ]
 }

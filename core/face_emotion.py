@@ -1,97 +1,113 @@
+# core/face_emotion.py
+"""
+Face Emotion Analyzer for Jarvis
+SAFE VERSION — No TensorFlow required.
+Uses DeepFace only if available; otherwise falls back to OpenCV Haarcascade.
+
+Fully compatible with:
+- shared memory engine
+- brain mood fusion
+- emotion reflection
+"""
+
 import cv2
-import numpy as np
-from deepface import DeepFace
-from core.memory_engine import JarvisMemory
-from core.speech_engine import speak
-from core.voice_effects import JarvisEffects
 import time
 
-memory = JarvisMemory()
+from core.memory_engine import shared_memory
+from core.speech_engine import speak
+from core.voice_effects import JarvisEffects
+
 jarvis_fx = JarvisEffects()
+
+# Try loading DeepFace (optional)
+try:
+    from deepface import DeepFace
+    DEEPFACE_AVAILABLE = True
+except Exception:
+    DEEPFACE_AVAILABLE = False
+    print("⚠️ DeepFace not available — using fallback face analyzer.")
+
+# Load Haarcascade (fallback)
+HAAR = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 
 class FaceEmotionAnalyzer:
-    """Analyzes facial expressions to detect mood and sync with Jarvis’s emotional state."""
+    """Detects user emotion from camera with safe fallback."""
 
     def __init__(self):
-        print("📸 Face Emotion Analyzer Initialized")
-
+        print("📸 Face Emotion Analyzer Ready (Safe Mode)")
+    
+    # ---------------------------------------------------------
     def capture_emotion(self):
-        """Capture one frame and analyze user emotion."""
+        """Capture one frame and analyze emotion in safe mode."""
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
-            speak("Camera access failed, Yash.", mood="alert")
             return None
 
-        # cinematic touch
-        speak("Let me take a quick look at you, Yash.", mood="happy")
-        time.sleep(0.7)
-
+        time.sleep(0.4)
         ret, frame = cap.read()
         cap.release()
 
         if not ret:
-            speak("I couldn’t capture your face clearly.", mood="alert")
             return None
 
-        # DeepFace expects RGB
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # ----------------------------------------------------
+        # If DeepFace exists → use it (max accuracy)
+        # ----------------------------------------------------
+        if DEEPFACE_AVAILABLE:
+            try:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                result = DeepFace.analyze(rgb, actions=['emotion'], enforce_detection=False)
+                detected = result.get("dominant_emotion", "neutral").lower()
+                return self._apply_mood(detected)
 
-        try:
-            # analyze emotion
-            analysis = DeepFace.analyze(
-                rgb_frame,
-                actions=['emotion'],
-                enforce_detection=False
-            )
+            except Exception as e:
+                print("⚠️ DeepFace failed, switching to fallback:", e)
 
-            # correct indexing: DeepFace returns a dict
-            dominant_emotion = analysis.get('dominant_emotion', 'neutral').lower()
+        # ----------------------------------------------------
+        # FALLBACK → Basic haar detection + neutral guess
+        # ----------------------------------------------------
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = HAAR.detectMultiScale(gray, 1.3, 5)
 
-            print(f"🧠 Detected Emotion: {dominant_emotion}")
+        if len(faces) == 0:
+            return self._apply_mood("neutral")
 
-            # map to Jarvis internal moods
-            mood_map = {
-                "happy": "happy",
-                "sad": "serious",
-                "angry": "serious",
-                "neutral": "neutral",
-                "surprise": "happy",
-                "fear": "alert",
-                "disgust": "serious"
-            }
+        # fallback cannot classify → treat as neutral
+        return self._apply_mood("neutral")
 
-            mood = mood_map.get(dominant_emotion, "neutral")
+    # ---------------------------------------------------------
+    # MOOD MAP + CINEMATIC RESPONSE
+    # ---------------------------------------------------------
+    def _apply_mood(self, emotion):
+        """Maps detected emotion to Jarvis mood system."""
 
-            # update memory + mood tone
-            memory.set_mood(mood)
-            jarvis_fx.mood_tone(mood)
+        emotion = emotion.lower()
 
-            # dynamic natural responses
-            if dominant_emotion in ["happy", "surprise"]:
-                speak(
-                    f"You look {dominant_emotion} today, Yash. That spark suits you perfectly.",
-                    mood="happy"
-                )
+        mood_map = {
+            "happy": "happy",
+            "surprise": "happy",
+            "sad": "serious",
+            "fear": "alert",
+            "angry": "alert",
+            "disgust": "serious",
+            "neutral": "neutral"
+        }
 
-            elif dominant_emotion in ["sad", "fear", "disgust"]:
-                speak(
-                    f"You seem a bit {dominant_emotion} today. Even the strongest have such days.",
-                    mood="serious"
-                )
+        jarvis_mood = mood_map.get(emotion, "neutral")
 
-            elif dominant_emotion == "angry":
-                speak("You look tense, Yash. Try taking a few deep breaths.", mood="serious")
+        # update global memory
+        shared_memory.set_mood(jarvis_mood)
+        jarvis_fx.mood_tone(jarvis_mood)
 
-            elif dominant_emotion == "neutral":
-                speak("You look calm and steady — a balanced state of mind.", mood="neutral")
+        # CINEMATIC REPLIES (trigger only occasionally)
+        if emotion == "happy":
+            speak("You look bright today, Yash.", mood="happy")
 
-            else:
-                speak("You seem thoughtful, Yash.", mood="neutral")
+        elif emotion in ["sad", "fear"]:
+            speak("You look a bit low… I'm here with you.", mood="serious")
 
-            return dominant_emotion
+        elif emotion == "angry":
+            speak("Your expression seems tense — breathe with me.", mood="alert")
 
-        except Exception as e:
-            print(f"⚠️ Emotion analysis failed: {e}")
-            speak("I couldn’t analyze your expression properly.", mood="alert")
-            return None
+        return emotion

@@ -1,4 +1,4 @@
-# main.py — FINAL STABLE VERSION (FaceAuth + Ambient + Success Sound + State Sync)
+# main.py — FINAL UPGRADED VERSION (FaceAuth + Ambient + Success Sound + State Sync + SleepManager attach)
 import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
@@ -11,10 +11,11 @@ from PyQt5 import QtWidgets
 
 # UI + effects
 from core.interface import InterfaceOverlay
-from core import voice_effects  # overlay attach
+from core import voice_effects  # overlay attach helper (may expose attach_overlay / overlay_instance)
 
 # TRUE shared state
 import core.state as state
+import core.sleep_manager as sleep_manager  # manage sleep/wake with overlay
 
 
 # ======================================================================
@@ -108,7 +109,7 @@ class FaceAuth:
             pass
 
         # Overlay scanning animation
-        if voice_effects.overlay_instance:
+        if getattr(voice_effects, "overlay_instance", None):
             try:
                 voice_effects.overlay_instance.set_status("🔍 Scanning your face…")
                 voice_effects.overlay_instance.set_mood("neutral")
@@ -116,7 +117,7 @@ class FaceAuth:
                 pass
 
         def scan_anim():
-            if not voice_effects.overlay_instance:
+            if not getattr(voice_effects, "overlay_instance", None):
                 return
             for _ in range(8):
                 try:
@@ -136,8 +137,10 @@ class FaceAuth:
 
         if not ret:
             speak("Couldn't capture a clear image.", mood="alert")
-            try: jarvis_fx.fade_out_ambient(800)
-            except: pass
+            try:
+                jarvis_fx.fade_out_ambient(800)
+            except:
+                pass
             return False
 
         # Save temp scan image
@@ -163,12 +166,16 @@ class FaceAuth:
             verified = self._fallback_compare(self.reference_path, scan_path)
 
         # Remove temp
-        try: os.remove(scan_path)
-        except: pass
+        try:
+            os.remove(scan_path)
+        except:
+            pass
 
         # Stop ambient
-        try: jarvis_fx.fade_out_ambient(800)
-        except: pass
+        try:
+            jarvis_fx.fade_out_ambient(800)
+        except:
+            pass
 
         # Return result
         return verified
@@ -200,18 +207,31 @@ def jarvis_startup(overlay):
     memory = JarvisMemory()
     handler = JarvisCommandHandler()
 
-    # Link overlay to effects
+    # Link overlay to effects (preferred API: attach_overlay)
     try:
         if hasattr(voice_effects, "attach_overlay"):
             voice_effects.attach_overlay(overlay)
         else:
+            # fallback: set attribute directly
             voice_effects.overlay_instance = overlay
         print("🌀 Overlay attached.")
+    except Exception as e:
+        print("⚠️ Overlay attach failed:", e)
+
+    # Start sleep manager with overlay so it can dim/wake the UI
+    try:
+        sleep_manager.start_manager(overlay)
+    except Exception:
+        try:
+            # fallback: start without overlay
+            sleep_manager.start_manager()
+        except Exception as e:
+            print("⚠️ Sleep manager failed to start:", e)
+
+    try:
+        overlay.set_status("Booting systems…")
     except:
         pass
-
-    try: overlay.set_status("Booting systems…")
-    except: pass
 
     # Boot animation
     for _ in range(3):
@@ -224,8 +244,10 @@ def jarvis_startup(overlay):
             time.sleep(0.5)
 
     # Startup sound
-    try: jarvis_fx.play_startup()
-    except Exception as e: print("⚠️ Startup sound:", e)
+    try:
+        jarvis_fx.play_startup()
+    except Exception as e:
+        print("⚠️ Startup sound:", e)
     time.sleep(5)
 
     speak("System booting up. Initializing cognition and neural modules.", mute_ambient=True)
@@ -242,22 +264,28 @@ def jarvis_startup(overlay):
     from core.speech_engine import speak, jarvis_fx
 
     if verified:
-        try: jarvis_fx.play_success()
-        except: pass
+        try:
+            jarvis_fx.play_success()
+        except:
+            pass
         try:
             overlay.set_status("Identity verified ✅")
             overlay.set_mood("happy")
             overlay.react_to_audio(1.3)
-        except: pass
+        except:
+            pass
         speak("Identity verified. Welcome back, Yash.", mood="happy", mute_ambient=True)
     else:
-        try: jarvis_fx.play_alert()
-        except: pass
+        try:
+            jarvis_fx.play_alert()
+        except:
+            pass
         try:
             overlay.set_status("Identity not recognized ❌")
             overlay.set_mood("alert")
             overlay.react_to_audio(0.6)
-        except: pass
+        except:
+            pass
         speak("I couldn't recognize you. Limited mode enabled.", mood="alert", mute_ambient=True)
 
     # ----------------------- GREETING ------------------------
@@ -269,16 +297,27 @@ def jarvis_startup(overlay):
     speak("Say 'Hey Jarvis' when you're ready.", mute_ambient=True)
 
     # ----------------------- LISTENER ------------------------
-    try: overlay.set_status("Listening…")
-    except: pass
+    try:
+        overlay.set_status("Listening…")
+    except:
+        pass
+
+    # Initialize LAST_INTERACTION so sleep manager has a baseline
+    try:
+        state.LAST_INTERACTION = time.time()
+    except:
+        pass
 
     print("\n🎤 Listener online — say: Hey Jarvis\n")
-    try: JarvisListener()
+    try:
+        # instantiate listener (it starts its own continuous thread)
+        JarvisListener()
     except Exception as e:
         print("⚠️ Listener failed:", e)
 
+    # main thread keeps running to keep Qt app alive and threads working
     while True:
-        time.sleep(1)
+        time.sleep(6)
 
 
 # ======================================================================
@@ -293,7 +332,7 @@ if __name__ == "__main__":
 
     try:
         overlay.run()
-    except:
+    except Exception:
         overlay.show()
 
     backend = threading.Thread(target=jarvis_startup, args=(overlay,), daemon=True)
